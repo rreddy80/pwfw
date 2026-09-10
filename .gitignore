@@ -1,0 +1,27 @@
+node_modules/
+dist/
+
+# env
+.env
+.env.local
+
+# playwright
+test-results/
+playwright-report/
+playwright/.cache/
+reports/
+blob-report/
+
+# storage state cache
+.auth/
+
+# logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+
+# sample app
+sample-app/node_modules/
+sample-app/dist/

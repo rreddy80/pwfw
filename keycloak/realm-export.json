@@ -1,0 +1,56 @@
+{
+  "realm": "demo",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "clients": [
+    {
+      "clientId": "demo-app",
+      "name": "Demo Sample App",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:5173/*"],
+      "webOrigins": ["http://localhost:5173"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "testuser",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "testuser@example.com",
+      "firstName": "Test",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Passw0rd!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "seconduser",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "seconduser@example.com",
+      "firstName": "Second",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Passw0rd2!",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

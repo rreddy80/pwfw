@@ -1,0 +1,18 @@
+# Local-only Keycloak instance for the sample app / demo E2E specs.
+# Not for CI: point KEYCLOAK_BASE_URL at a real environment in Drone secrets instead.
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    command: ['start-dev', '--import-realm']
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - '8080:8080'
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import
+    healthcheck:
+      test: ['CMD-SHELL', 'exec 3<>/dev/tcp/localhost/8080']
+      interval: 5s
+      timeout: 5s
+      retries: 20
