@@ -52,6 +52,13 @@ export class KeycloakAuth {
     authorizeUrl.searchParams.set('scope', 'openid');
     authorizeUrl.searchParams.set('code_challenge', pkce.codeChallenge);
     authorizeUrl.searchParams.set('code_challenge_method', 'S256');
+    // Not required by the OIDC spec for the authorization-code flow (only for
+    // implicit/hybrid, where the id_token comes back through the browser URL rather than a
+    // server-to-server token exchange) — Keycloak accepts this request without one. Sent
+    // anyway to mirror what keycloak-js actually sends and in case a stricter client policy
+    // ever requires it; we don't validate it back since there's no attacker to defend
+    // against in a request we made ourselves.
+    authorizeUrl.searchParams.set('nonce', randomBytes(16).toString('base64url'));
 
     const authorizePage = await this.request.get(authorizeUrl.toString());
     const html = await authorizePage.text();
