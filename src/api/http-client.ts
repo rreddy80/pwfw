@@ -15,6 +15,8 @@ export interface RequestOptions {
   /** application/x-www-form-urlencoded body (e.g. OAuth token endpoints). Mutually exclusive with `data`. */
   form?: Record<string, string>;
   params?: Record<string, string | number | boolean>;
+  /** Set to 0 to inspect a redirect response directly instead of Playwright silently following it. */
+  maxRedirects?: number;
 }
 
 /**
@@ -68,6 +70,7 @@ export class HttpClient {
       data: opts.form ? undefined : opts.data,
       form: opts.form,
       params: opts.params,
+      maxRedirects: opts.maxRedirects,
     });
 
     const status = response.status();

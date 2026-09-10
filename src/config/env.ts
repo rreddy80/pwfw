@@ -12,11 +12,13 @@ import 'dotenv/config';
 import { z } from 'zod';
 
 const envSchema = z.object({
-  // Application under test (UI)
-  BASE_URL: z.string().url().default('http://localhost:5173'),
-
-  // REST API under test
-  API_BASE_URL: z.string().url().default('https://jsonplaceholder.typicode.com'),
+  // Application under test (UI) and REST API under test — deliberately NOT defaulted.
+  // Unlike KEYCLOAK_BASE_URL (below), these point at real, always-reachable services (the
+  // demo app, JSONPlaceholder). A default here means a forgotten env var in CI doesn't fail
+  // loudly — it silently runs the suite against the wrong environment and still "passes".
+  // Copy .env.example to .env (or set these in CI) before running anything.
+  BASE_URL: z.string().url(),
+  API_BASE_URL: z.string().url(),
 
   // Keycloak (IAM)
   KEYCLOAK_BASE_URL: z.string().url().default('http://localhost:8080'),

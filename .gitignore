@@ -12,9 +12,6 @@ playwright/.cache/
 reports/
 blob-report/
 
-# storage state cache
-.auth/
-
 # logs
 *.log
 npm-debug.log*

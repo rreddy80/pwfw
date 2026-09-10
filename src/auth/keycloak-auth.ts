@@ -1,8 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { APIRequestContext } from '@playwright/test';
+import type { APIRequestContext, APIResponse } from '@playwright/test';
 import { keycloakConfig } from '../config/keycloak.config.js';
 import { logger } from '../helpers/logger.js';
 import type { AuthTokens } from '../api/types.js';
+
+/** Bound on redirect hops after the credentials POST — real chains are 1-3; this just stops a genuine loop from hanging forever. */
+const MAX_REDIRECT_HOPS = 8;
 
 export interface BrowserSessionResult {
   tokens: AuthTokens;
@@ -23,8 +26,10 @@ export interface BrowserSessionResult {
  *
  *   1. GET the authorize endpoint (same request the SPA's redirect would make) — this is
  *      Keycloak rendering its login form.
- *   2. POST credentials to that form's own action URL. Keycloak responds with a redirect
- *      back to the app and, critically, sets its SSO session cookie in the process.
+ *   2. POST credentials to that form's own action URL. Keycloak responds with a redirect —
+ *      sometimes straight to `redirect_uri?...code=...`, sometimes through one or more
+ *      intermediate hops first depending on Keycloak version/flow config (see
+ *      `followRedirectsToAuthorizationCode`) — setting its SSO session cookie along the way.
  *   3. Exchange the returned authorization code for tokens directly (useful if the test
  *      also wants a bearer token for API calls in the same run).
  *
@@ -73,8 +78,8 @@ export class KeycloakAuth {
       );
     }
 
-    // maxRedirects: 0 — we need the raw 302 to read the auth code out of `Location`
-    // ourselves, not have Playwright silently follow it.
+    // maxRedirects: 0 — we need the raw 302s to read the auth code out of `Location`
+    // ourselves, not have Playwright silently follow them.
     const loginResponse = await this.request.post(formAction, {
       form: { username, password, credentialId: '' },
       maxRedirects: 0,
@@ -87,17 +92,57 @@ export class KeycloakAuth {
       );
     }
 
-    const location = loginResponse.headers()['location'];
-    const code = location ? new URL(location).searchParams.get('code') : null;
-    if (!code) {
-      throw new Error(`Keycloak redirected without an authorization code (Location: ${location}).`);
-    }
+    const code = await this.followRedirectsToAuthorizationCode(loginResponse);
 
     const tokens = await this.exchangeCodeForTokens(code, redirectUri, pkce.codeVerifier);
 
     logger.info('Established Keycloak SSO session via API (no browser login form was rendered)');
 
     return { tokens, storageState: await this.request.storageState() };
+  }
+
+  /**
+   * The credentials POST's 302 doesn't always land straight on `redirect_uri?...code=...` —
+   * depending on Keycloak version/authentication-flow configuration, it can bounce through
+   * one or more intermediate hops first (observed in the wild: a GET back to
+   * `login-actions/authenticate`, no `session_code`/`execution` this time, carrying the
+   * `AUTH_SESSION_ID`/`KC_RESTART` cookies — apparently a restart-cookie verification step
+   * some flow configurations insert). A browser just follows wherever Keycloak sends it
+   * next; this does the same rather than assuming a fixed hop count, and only treats a
+   * non-redirect response as an actual failure.
+   */
+  private async followRedirectsToAuthorizationCode(initialResponse: APIResponse): Promise<string> {
+    let response = initialResponse;
+
+    for (let hop = 1; hop <= MAX_REDIRECT_HOPS; hop++) {
+      const location = response.headers()['location'];
+      if (!location) {
+        throw new Error(
+          `Keycloak returned a ${response.status()} with no Location header while completing ` +
+            `login (hop ${hop}).`,
+        );
+      }
+
+      const code = new URL(location).searchParams.get('code');
+      if (code) return code;
+
+      // Not the final hop yet — follow it exactly like a browser would (redirects are
+      // followed via GET regardless of the method that produced them).
+      response = await this.request.get(location, { maxRedirects: 0 });
+
+      if (response.status() !== 302) {
+        throw new Error(
+          `Expected another redirect while completing Keycloak login, got status ` +
+            `${response.status()} instead (hop ${hop + 1}). This usually means a required ` +
+            'action (update password, verify email, configure OTP, terms of service, ...) is ' +
+            'blocking automated login for this user — check the account in Keycloak.',
+        );
+      }
+    }
+
+    throw new Error(
+      `Keycloak login didn't reach an authorization code after ${MAX_REDIRECT_HOPS} redirects.`,
+    );
   }
 
   private async exchangeCodeForTokens(

@@ -9,15 +9,16 @@ tests/*.spec.ts
 src/fixtures/index.ts      <- specs only ever import { test, expect } from here
       |
       +-- api.fixtures.ts    -> apiHttpClient, usersController, postsController, authController
-      +-- auth.fixtures.ts   -> authMode, apiTokens, authenticatedPage   (extends api.fixtures)
+      +-- auth.fixtures.ts   -> authMode, apiTokens, authenticatedPage,
+      |                         authenticatedApiHttpClient   (extends api.fixtures)
       +-- page.fixtures.ts   -> loginPage, landingPage
              |
              v
 src/api/            src/auth/            src/pages/
 BaseController      KeycloakAuth         BasePage
-  |                 storage-state.ts       |
-  v                                        v
-HttpClient                          KeycloakLoginPage, LandingPage
+  |                       |               |
+  v                       v               v
+HttpClient  <--(storageState)--  KeycloakLoginPage, LandingPage
   |
   v
 Playwright APIRequestContext

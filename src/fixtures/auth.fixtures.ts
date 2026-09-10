@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 import { env } from '../config/env.js';
-import { KeycloakAuth } from '../auth/keycloak-auth.js';
-import { readStorageStateCachePath, writeStorageStateCache } from '../auth/storage-state.js';
+import { HttpClient } from '../api/http-client.js';
+import { KeycloakAuth, type BrowserSessionResult } from '../auth/keycloak-auth.js';
 import { KeycloakLoginPage } from '../pages/keycloak-login.page.js';
 import { LandingPage } from '../pages/landing.page.js';
 import type { AuthTokens } from '../api/types.js';
@@ -16,6 +16,8 @@ export interface TestUser {
   password: string;
 }
 
+type SsoSession = BrowserSessionResult['storageState'];
+
 export interface AuthFixtures {
   /**
    * `test.use({ authMode: 'ui' })` to drive the real Keycloak login form; defaults to
@@ -29,22 +31,36 @@ export interface AuthFixtures {
    * (keyed purely on `testUser.username`), so different users never share a session.
    */
   testUser: TestUser;
-  /** Password-grant tokens for pure API-testing specs — no browser involved at all. */
+  /** Password-grant bearer tokens — for backends that authenticate via `Authorization: Bearer`. */
   apiTokens: AuthTokens;
   /** A page already sitting on the authenticated landing screen, reached via `authMode`. */
   authenticatedPage: Page;
+  /**
+   * An `HttpClient` (bound to `API_BASE_URL`) carrying the *same* Keycloak session cookies
+   * `authenticatedPage` uses — for backends that authenticate via session cookie rather than
+   * a bearer token (common when the frontend and backend sit behind one gateway/origin).
+   * Both come from the same underlying login, so a test using both is genuinely one identity,
+   * not two independently-obtained ones. See `docs/AUTH.md`.
+   */
+  authenticatedApiHttpClient: HttpClient;
 }
 
 export interface AuthWorkerFixtures {
   /**
-   * Worker-scoped: given a `TestUser`, returns a cached SSO-cookie `storageState` file path
-   * for that user, running the Keycloak login dance only the first time a given user is
-   * asked for in this worker (memoized by username in-memory) and reusing the on-disk cache
-   * across workers otherwise. Different users get different cache entries and never
-   * contend with each other; the *same* user requested concurrently from two tests in this
-   * worker shares one in-flight login promise rather than logging in twice.
+   * Worker-scoped: given a `TestUser`, returns Keycloak's SSO session (cookies + tokens) for
+   * that user — running the real login dance only the first time a given username is asked
+   * for in this worker (memoized in-memory by username; kept alive for the worker's whole
+   * lifetime via this closure) and returning the cached session immediately after that. Two
+   * tests in this worker asking for the *same* user share one in-flight login instead of
+   * racing to do it twice; different users get separate entries and never block each other.
+   *
+   * Purely in-memory, no disk cache: a Playwright worker is one Node process for its whole
+   * lifetime, so memoizing in a closure already gets the "once per worker" benefit that
+   * matters. A different worker (a separate process) redoing the same user's login once is a
+   * small, bounded cost — not worth trading for a file on disk with its own path to explain,
+   * a cross-process write race to guard against, and a cache to go stale.
    */
-  resolveSsoStorageStatePath: (testUser: TestUser) => Promise<string>;
+  resolveSsoSession: (testUser: TestUser) => Promise<SsoSession>;
 }
 
 /**
@@ -59,33 +75,25 @@ export const test = apiTest.extend<AuthFixtures, AuthWorkerFixtures>({
     await use(await authController.passwordGrant(testUser.username, testUser.password));
   },
 
-  resolveSsoStorageStatePath: [
+  resolveSsoSession: [
     async ({ playwright }, use) => {
-      // Per-worker memoization cache, keyed by username — kept alive for the worker's whole
-      // lifetime via this closure. Two tests in this worker asking for the *same* user share
-      // one in-flight login instead of racing to do it twice; different users get separate
-      // entries and never block on each other.
-      const inFlight = new Map<string, Promise<string>>();
+      const inFlight = new Map<string, Promise<SsoSession>>();
 
-      const resolve = (testUser: TestUser): Promise<string> => {
+      const resolve = (testUser: TestUser): Promise<SsoSession> => {
         const cacheKey = testUser.username;
         const existing = inFlight.get(cacheKey);
         if (existing) return existing;
 
         const promise = (async () => {
-          const cached = await readStorageStateCachePath(cacheKey);
-          if (cached) return cached;
-
           const request = await playwright.request.newContext();
           const keycloakAuth = new KeycloakAuth(request);
-          await keycloakAuth.loginForBrowserSession(
+          const { storageState } = await keycloakAuth.loginForBrowserSession(
             testUser.username,
             testUser.password,
             env.BASE_URL,
           );
-          const path = await writeStorageStateCache(cacheKey, await request.storageState());
           await request.dispose();
-          return path;
+          return storageState;
         })();
 
         inFlight.set(cacheKey, promise);
@@ -97,7 +105,7 @@ export const test = apiTest.extend<AuthFixtures, AuthWorkerFixtures>({
     { scope: 'worker' },
   ],
 
-  authenticatedPage: async ({ browser, authMode, testUser, resolveSsoStorageStatePath }, use) => {
+  authenticatedPage: async ({ browser, authMode, testUser, resolveSsoSession }, use) => {
     if (authMode === 'ui') {
       const context = await browser.newContext();
       const page = await context.newPage();
@@ -109,12 +117,22 @@ export const test = apiTest.extend<AuthFixtures, AuthWorkerFixtures>({
       return;
     }
 
-    const storageStatePath = await resolveSsoStorageStatePath(testUser);
-    const context = await browser.newContext({ storageState: storageStatePath });
+    const storageState = await resolveSsoSession(testUser);
+    const context = await browser.newContext({ storageState });
     const page = await context.newPage();
     await page.goto(env.BASE_URL);
     await new LandingPage(page).expectLoaded();
     await use(page);
     await context.close();
+  },
+
+  authenticatedApiHttpClient: async ({ playwright, testUser, resolveSsoSession }, use) => {
+    const storageState = await resolveSsoSession(testUser);
+    const context = await playwright.request.newContext({
+      baseURL: env.API_BASE_URL,
+      storageState,
+    });
+    await use(new HttpClient(context));
+    await context.dispose();
   },
 });

@@ -23,11 +23,11 @@ specs that want a real UI login but don't care about the flow itself.
 
 ## API mode — skip the form, still get a real authenticated session
 
-This is the "log in via API, keep the tokens/session a UI test needs" mode. It's two
-different tools for two different needs — using the wrong one is a common footgun, worth
-being explicit about:
+This is the "log in via API, keep the tokens/session a UI test needs" mode. There are
+**three** tools here, not one — which to reach for depends entirely on how your real backend
+authenticates a request. Using the wrong one is a common footgun, worth being explicit about:
 
-### If the spec never touches the browser: `AuthController.passwordGrant`
+### Backend validates a `Authorization: Bearer` token: `AuthController.passwordGrant`
 
 ```ts
 test('...', async ({ authController, apiHttpClient }) => {
@@ -46,6 +46,27 @@ endpoint end to end (get a token, call the backend with it, confirm it's rejecte
 one) — the other `tests/api/*` specs target JSONPlaceholder, which doesn't check auth at
 all, so they never attach a token; don't take those as the pattern to copy for a real,
 Keycloak-protected backend.
+
+### Backend validates the Keycloak session cookie instead (no bearer token at all): `authenticatedApiHttpClient`
+
+Common when the frontend and backend sit behind one gateway/origin and something in front
+of the backend checks the same `KEYCLOAK_SESSION`/`KEYCLOAK_IDENTITY` cookies the browser
+carries, rather than a JWT. `apiTokens`/`passwordGrant` won't help here — there's no bearer
+token in the picture at all. Use the `authenticatedApiHttpClient` fixture instead: an
+`HttpClient` pre-loaded with the _same_ Keycloak session cookies `authenticatedPage` uses —
+literally the same login, not a second one, so a test using both is one identity throughout.
+
+```ts
+test('...', async ({ authenticatedApiHttpClient }) => {
+  const ordersController = new OrdersController(authenticatedApiHttpClient);
+  const orders = await ordersController.listOrders(); // authenticated via cookie, no token anywhere
+});
+```
+
+See `tests/e2e/shared-session.e2e.spec.ts` for this proven two ways: the API client's
+cookies are recognized by Keycloak as a real, working session (not just present-but-inert),
+and its `KEYCLOAK_SESSION` cookie value is byte-for-byte the same one `authenticatedPage`'s
+browser context carries.
 
 ### If the spec needs a browser page that's already logged into the real app: `authenticatedPage`
 
@@ -74,11 +95,15 @@ cookie. Load it into a fresh `browser.newContext({ storageState })`, navigate to
 and its `login-required` redirect to Keycloak finds the existing SSO session and bounces
 straight back authenticated — no form rendered, no credentials typed into a page.
 
-`authenticatedPage` (`src/fixtures/auth.fixtures.ts`) wraps all of this. The expensive part
-— the HTTP login dance — runs once per **user, per worker** (`resolveSsoStorageStatePath` is
-a worker-scoped fixture, memoized by username) and is cached to `.auth/` for the rest of that
-run; each test still gets its own fresh browser context/page on top of that cached session,
-so tests stay isolated from each other while only paying the Keycloak round trip once per user.
+`authenticatedPage` and `authenticatedApiHttpClient` (`src/fixtures/auth.fixtures.ts`) both
+wrap all of this, and both pull from the same place: `resolveSsoSession`, a worker-scoped
+fixture that runs the real login dance only the first time a given username is asked for in
+this worker, memoized **in memory** (a `Map` in the fixture's closure — no disk, no `.auth/`
+file) for the rest of that worker's run. Each test still gets its own fresh browser
+context/API context on top of that cached session, so tests stay isolated from each other
+while only paying the Keycloak round trip once per user per worker. A different worker
+(separate process) redoing the same user's login once is a small, bounded cost — not worth
+trading for a cross-process file cache with its own path to explain and races to guard against.
 
 ```ts
 test('...', async ({ authenticatedPage }) => {
@@ -102,17 +127,17 @@ test('...', async ({ authenticatedPage }) => {
 ```
 
 Wherever the credentials come from — more `.env`/CI-secret pairs (see `.env.example`), a
-value read at runtime, whatever — pass them straight in. The cache (below) keys purely on
-`testUser.username`, so any two distinct usernames automatically get their own `.auth/`
-entry and never share a session; there's nothing to register or look up by name first.
+value read at runtime, whatever — pass them straight in. `resolveSsoSession` keys purely on
+`testUser.username`, so any two distinct usernames automatically get their own cache entry
+in that worker and never share a session; there's nothing to register or look up by name first.
 
 **The one thing per-user caching doesn't make safe: the _same_ user, used destructively, in
-parallel.** The cached SSO cookie for one user is one real Keycloak session ID shared by
+parallel.** The cached SSO session for one user is one real Keycloak session ID shared by
 every context that loads it. Two parallel tests reading that session (just navigating,
 asserting) are fine — it's the same as opening that user's account in two browser tabs.
 Calling `landingPage.logout()` on it is not fine: logout hits Keycloak's real end-session
 endpoint and kills that session server-side, which would pull the rug out from under any
-other test currently relying on the same cached cookie. Rule of thumb: a spec that logs a
+other test currently relying on the same cached session. Rule of thumb: a spec that logs a
 user out should authenticate that user fresh — `test.use({ authMode: 'ui' })`, or a
 dedicated, not-shared identity — rather than going through the cached `authenticatedPage`
 default. See `tests/e2e/multi-user.e2e.spec.ts` for both patterns side by side.
