@@ -56,15 +56,29 @@ token in the picture at all. Use the `authenticatedApiHttpClient` fixture instea
 `HttpClient` pre-loaded with the _same_ Keycloak session cookies `authenticatedPage` uses —
 literally the same login, not a second one, so a test using both is one identity throughout.
 
+Don't stop at getting a pre-authenticated `HttpClient`, though — wire your controller as a
+fixture too, the exact same way `usersController`/`postsController` are wired to the plain
+`apiHttpClient` in `api.fixtures.ts` (just pointed at `authenticatedApiHttpClient` instead).
+That's what actually gets you "the test doesn't do anything about login" — a spec should
+receive an already-authenticated controller, not construct one:
+
 ```ts
-test('...', async ({ authenticatedApiHttpClient }) => {
-  const ordersController = new OrdersController(authenticatedApiHttpClient);
+// in a fixtures file (e.g. auth.fixtures.ts, alongside authenticatedApiHttpClient):
+ordersController: async ({ authenticatedApiHttpClient }, use) => {
+  await use(new OrdersController(authenticatedApiHttpClient));
+},
+```
+
+```ts
+// then any spec just does this — no login, no client, no manual wiring:
+test('...', async ({ ordersController }) => {
   const orders = await ordersController.listOrders(); // authenticated via cookie, no token anywhere
 });
 ```
 
-See `tests/e2e/shared-session.e2e.spec.ts` for this proven two ways: the API client's
-cookies are recognized by Keycloak as a real, working session (not just present-but-inert),
+See `tests/e2e/shared-session.e2e.spec.ts` for the underlying cookie mechanics proven two
+ways: the API client's cookies are recognized by Keycloak as a real, working session (not
+just present-but-inert),
 and its `KEYCLOAK_SESSION` cookie value is byte-for-byte the same one `authenticatedPage`'s
 browser context carries.
 
