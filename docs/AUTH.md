@@ -23,17 +23,51 @@ specs that want a real UI login but don't care about the flow itself.
 
 ## API mode — skip the form, still get a real authenticated session
 
-This is the "log in via API, keep the tokens/session a UI test needs" mode. There are
-**three** tools here, not one — which to reach for depends entirely on how your real backend
-authenticates a request. Using the wrong one is a common footgun, worth being explicit about:
+This is the "log in via API, keep the tokens/session a UI test needs" mode.
 
-### Backend validates a `Authorization: Bearer` token: `AuthController.passwordGrant`
+### The default: `apiHttpClient` is authenticated via Keycloak session cookie, out of the box
+
+Every controller (`usersController`, `postsController`, and every microservice controller
+you add — see `api.fixtures.ts`) is built on `apiHttpClient`, which is pre-loaded with the
+_same_ Keycloak session cookies `authenticatedPage` uses — literally the same login, not a
+second one, so a test using both a controller and `authenticatedPage` is one identity
+throughout. This is the right default for a gateway/BFF setup where the frontend and every
+backend service sit behind one origin and something in front of them checks the same
+`KEYCLOAK_SESSION`/`KEYCLOAK_IDENTITY` cookies the browser carries, rather than a JWT — no
+bearer token anywhere in the picture, and no per-controller decision to make:
+
+```ts
+test('...', async ({ ordersController }) => {
+  const orders = await ordersController.listOrders(); // already authenticated, no login code here
+});
+```
+
+Add a new microservice controller the same way `postsController` is wired in
+`api.fixtures.ts` — it inherits authentication automatically, nothing extra to configure:
+
+```ts
+ordersController: async ({ apiHttpClient }, use) => {
+  await use(new OrdersController(apiHttpClient));
+},
+```
+
+See `tests/api/keycloak-cookie-session.api.spec.ts` (the pure API-layer proof — this is the
+one to copy for your own cookie-authenticated API specs) and `tests/e2e/shared-session.e2e.spec.ts`
+(the cross-cutting proof, needs a browser) for this proven two ways: `apiHttpClient`'s
+cookies are recognized by Keycloak as a real, working session (not just present-but-inert),
+and its `KEYCLOAK_SESSION` cookie value is byte-for-byte the same one `authenticatedPage`'s
+browser context carries.
+
+### The exception: a backend that validates a `Authorization: Bearer` token instead
+
+Not every service necessarily agrees with the rest of your system — if one does check a
+bearer token rather than the session cookie, get one explicitly and attach it just for that
+call:
 
 ```ts
 test('...', async ({ authController, apiHttpClient }) => {
   const tokens = await authController.passwordGrant(env.TEST_USERNAME, env.TEST_PASSWORD);
-  apiHttpClient.setAuthToken(tokens.accessToken);
-  // ...call the backend directly with a Bearer token, no browser involved
+  apiHttpClient.setAuthToken(tokens.accessToken); // adds a Bearer header on top of the cookies already present
 });
 ```
 
@@ -44,43 +78,8 @@ Access Grants** enabled (already set on the demo realm's `demo-app` client).
 See `tests/api/keycloak-protected.api.spec.ts` for this proven against a real protected
 endpoint end to end (get a token, call the backend with it, confirm it's rejected without
 one) — the other `tests/api/*` specs target JSONPlaceholder, which doesn't check auth at
-all, so they never attach a token; don't take those as the pattern to copy for a real,
-Keycloak-protected backend.
-
-### Backend validates the Keycloak session cookie instead (no bearer token at all): `authenticatedApiHttpClient`
-
-Common when the frontend and backend sit behind one gateway/origin and something in front
-of the backend checks the same `KEYCLOAK_SESSION`/`KEYCLOAK_IDENTITY` cookies the browser
-carries, rather than a JWT. `apiTokens`/`passwordGrant` won't help here — there's no bearer
-token in the picture at all. Use the `authenticatedApiHttpClient` fixture instead: an
-`HttpClient` pre-loaded with the _same_ Keycloak session cookies `authenticatedPage` uses —
-literally the same login, not a second one, so a test using both is one identity throughout.
-
-Don't stop at getting a pre-authenticated `HttpClient`, though — wire your controller as a
-fixture too, the exact same way `usersController`/`postsController` are wired to the plain
-`apiHttpClient` in `api.fixtures.ts` (just pointed at `authenticatedApiHttpClient` instead).
-That's what actually gets you "the test doesn't do anything about login" — a spec should
-receive an already-authenticated controller, not construct one:
-
-```ts
-// in a fixtures file (e.g. auth.fixtures.ts, alongside authenticatedApiHttpClient):
-ordersController: async ({ authenticatedApiHttpClient }, use) => {
-  await use(new OrdersController(authenticatedApiHttpClient));
-},
-```
-
-```ts
-// then any spec just does this — no login, no client, no manual wiring:
-test('...', async ({ ordersController }) => {
-  const orders = await ordersController.listOrders(); // authenticated via cookie, no token anywhere
-});
-```
-
-See `tests/e2e/shared-session.e2e.spec.ts` for the underlying cookie mechanics proven two
-ways: the API client's cookies are recognized by Keycloak as a real, working session (not
-just present-but-inert),
-and its `KEYCLOAK_SESSION` cookie value is byte-for-byte the same one `authenticatedPage`'s
-browser context carries.
+all, so nothing there depends on a token or a cookie being present; don't take those as the
+pattern to copy for a real, Keycloak-protected backend.
 
 ### If the spec needs a browser page that's already logged into the real app: `authenticatedPage`
 
@@ -109,15 +108,16 @@ cookie. Load it into a fresh `browser.newContext({ storageState })`, navigate to
 and its `login-required` redirect to Keycloak finds the existing SSO session and bounces
 straight back authenticated — no form rendered, no credentials typed into a page.
 
-`authenticatedPage` and `authenticatedApiHttpClient` (`src/fixtures/auth.fixtures.ts`) both
-wrap all of this, and both pull from the same place: `resolveSsoSession`, a worker-scoped
-fixture that runs the real login dance only the first time a given username is asked for in
-this worker, memoized **in memory** (a `Map` in the fixture's closure — no disk, no `.auth/`
-file) for the rest of that worker's run. Each test still gets its own fresh browser
-context/API context on top of that cached session, so tests stay isolated from each other
-while only paying the Keycloak round trip once per user per worker. A different worker
-(separate process) redoing the same user's login once is a small, bounded cost — not worth
-trading for a cross-process file cache with its own path to explain and races to guard against.
+`authenticatedPage` (`page.fixtures.ts`) and `apiHttpClient` (`api.fixtures.ts`) both wrap
+all of this, and both pull from the same place: `resolveSsoSession`, a worker-scoped fixture
+defined once in the shared foundation, `auth.fixtures.ts`, that both files extend. It runs
+the real login dance only the first time a given username is asked for in this worker,
+memoized **in memory** (a `Map` in the fixture's closure — no disk, no `.auth/` file) for the
+rest of that worker's run. Each test still gets its own fresh browser context/API context on
+top of that cached session, so tests stay isolated from each other while only paying the
+Keycloak round trip once per user per worker. A different worker (separate process) redoing
+the same user's login once is a small, bounded cost — not worth trading for a cross-process
+file cache with its own path to explain and races to guard against.
 
 ```ts
 test('...', async ({ authenticatedPage }) => {

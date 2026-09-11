@@ -9,11 +9,13 @@ Steps run in `mcr.microsoft.com/playwright:v1.49.0-jammy`, which ships with brow
 preinstalled — no separate `playwright install --with-deps` step needed. Keep the image tag
 in sync with the `@playwright/test` version in `package.json`.
 
-`e2e-tests` points at a real test/staging environment via secrets
+Both `api-tests` and `e2e-tests` point at a real test/staging environment via secrets
 (`e2e_base_url`, `keycloak_base_url`, `keycloak_realm`, `keycloak_client_id`,
-`keycloak_client_secret`, `test_username`, `test_password`) — it does **not** start the
-repo's `docker-compose.yml` Keycloak or `sample-app/`; those are for local development of
-the framework only.
+`keycloak_client_secret`, `test_username`, `test_password`) — `api-tests` needs Keycloak too,
+not just `e2e-tests`: `apiHttpClient` authenticates via a real Keycloak session before its
+first call (see `docs/AUTH.md`), there's no unauthenticated API path once you've replaced
+the demo controllers with your own. Neither step starts the repo's `docker-compose.yml`
+Keycloak or `sample-app/`; those are for local development of the framework only.
 
 ## Reports
 

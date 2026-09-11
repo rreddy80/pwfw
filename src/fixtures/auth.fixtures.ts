@@ -1,11 +1,9 @@
-import type { Page } from '@playwright/test';
+import { test as base } from '@playwright/test';
 import { env } from '../config/env.js';
+import { AuthController } from '../api/auth.controller.js';
 import { HttpClient } from '../api/http-client.js';
 import { KeycloakAuth, type BrowserSessionResult } from '../auth/keycloak-auth.js';
-import { KeycloakLoginPage } from '../pages/keycloak-login.page.js';
-import { LandingPage } from '../pages/landing.page.js';
 import type { AuthTokens } from '../api/types.js';
-import { test as apiTest } from './api.fixtures.js';
 
 export type AuthMode = 'ui' | 'api';
 
@@ -20,8 +18,9 @@ type SsoSession = BrowserSessionResult['storageState'];
 
 export interface AuthFixtures {
   /**
-   * `test.use({ authMode: 'ui' })` to drive the real Keycloak login form; defaults to
-   * `'api'`, which reaches the landing page via the SSO-cookie trick with no visible form.
+   * `test.use({ authMode: 'ui' })` to drive the real Keycloak login form (see
+   * `page.fixtures.ts`'s `authenticatedPage`); defaults to `'api'`, which reaches an
+   * authenticated session via the SSO-cookie trick with no visible form.
    */
   authMode: AuthMode;
   /**
@@ -31,18 +30,10 @@ export interface AuthFixtures {
    * (keyed purely on `testUser.username`), so different users never share a session.
    */
   testUser: TestUser;
-  /** Password-grant bearer tokens — for backends that authenticate via `Authorization: Bearer`. */
+  /** Talks to Keycloak's token endpoint via absolute URLs — no baseURL needed. */
+  authController: AuthController;
+  /** Password-grant bearer tokens — for the rare backend that authenticates via `Authorization: Bearer` instead of the session cookie every other fixture here uses. */
   apiTokens: AuthTokens;
-  /** A page already sitting on the authenticated landing screen, reached via `authMode`. */
-  authenticatedPage: Page;
-  /**
-   * An `HttpClient` (bound to `API_BASE_URL`) carrying the *same* Keycloak session cookies
-   * `authenticatedPage` uses — for backends that authenticate via session cookie rather than
-   * a bearer token (common when the frontend and backend sit behind one gateway/origin).
-   * Both come from the same underlying login, so a test using both is genuinely one identity,
-   * not two independently-obtained ones. See `docs/AUTH.md`.
-   */
-  authenticatedApiHttpClient: HttpClient;
 }
 
 export interface AuthWorkerFixtures {
@@ -64,12 +55,22 @@ export interface AuthWorkerFixtures {
 }
 
 /**
- * Builds on `api.fixtures.ts` (needs `authController` for `apiTokens`). Merged with the page
- * object fixtures in `src/fixtures/index.ts` — specs should import from there, not here.
+ * The shared foundation — `api.fixtures.ts` and `page.fixtures.ts` both extend this `test`,
+ * not the other way around. Every real microservice controller (wired in `api.fixtures.ts`)
+ * and `authenticatedPage` (wired in `page.fixtures.ts`) come from the *same*
+ * `resolveSsoSession` call for a given user, so one login serves both layers — neither file
+ * needs to know the other exists. See `docs/AUTH.md` and `docs/ARCHITECTURE.md`.
  */
-export const test = apiTest.extend<AuthFixtures, AuthWorkerFixtures>({
+export const test = base.extend<AuthFixtures, AuthWorkerFixtures>({
   authMode: ['api', { option: true }],
   testUser: [{ username: env.TEST_USERNAME, password: env.TEST_PASSWORD }, { option: true }],
+
+  // The plain built-in `request` fixture is fine here — `AuthController` always calls
+  // Keycloak with fully-qualified URLs (`keycloakConfig.tokenUrl`, etc.), so there's no
+  // relative path that would need a `baseURL` to resolve against.
+  authController: async ({ request }, use) => {
+    await use(new AuthController(new HttpClient(request)));
+  },
 
   apiTokens: async ({ authController, testUser }, use) => {
     await use(await authController.passwordGrant(testUser.username, testUser.password));
@@ -104,35 +105,4 @@ export const test = apiTest.extend<AuthFixtures, AuthWorkerFixtures>({
     },
     { scope: 'worker' },
   ],
-
-  authenticatedPage: async ({ browser, authMode, testUser, resolveSsoSession }, use) => {
-    if (authMode === 'ui') {
-      const context = await browser.newContext();
-      const page = await context.newPage();
-      await page.goto(env.BASE_URL);
-      await new KeycloakLoginPage(page).login(testUser.username, testUser.password);
-      await new LandingPage(page).expectLoaded();
-      await use(page);
-      await context.close();
-      return;
-    }
-
-    const storageState = await resolveSsoSession(testUser);
-    const context = await browser.newContext({ storageState });
-    const page = await context.newPage();
-    await page.goto(env.BASE_URL);
-    await new LandingPage(page).expectLoaded();
-    await use(page);
-    await context.close();
-  },
-
-  authenticatedApiHttpClient: async ({ playwright, testUser, resolveSsoSession }, use) => {
-    const storageState = await resolveSsoSession(testUser);
-    const context = await playwright.request.newContext({
-      baseURL: env.API_BASE_URL,
-      storageState,
-    });
-    await use(new HttpClient(context));
-    await context.dispose();
-  },
 });

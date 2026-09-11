@@ -4,9 +4,11 @@
 # TEST_REPORT_NAME); `notify-teams` runs last, reads both, and posts exactly one Adaptive
 # Card summary regardless of whether the run passed or failed.
 #
-# e2e-tests points at a real, already-running test/staging environment via secrets — this
+# Both steps point at a real, already-running Keycloak/test environment via secrets — this
 # pipeline does not spin up the repo's docker-compose Keycloak + sample-app (those are for
-# local development of the framework itself; see README.md / docs/CI.md).
+# local development of the framework itself; see README.md / docs/CI.md). api-tests needs
+# Keycloak too, not just e2e-tests: every controller authenticates via a real Keycloak
+# session before its first call (see docs/AUTH.md) — there's no unauthenticated API path.
 #
 # Required secrets (drone secrets add / from your Drone org settings):
 #   e2e_base_url, keycloak_base_url, keycloak_realm, keycloak_client_id, keycloak_client_secret,
@@ -25,7 +27,21 @@ steps:
     image: mcr.microsoft.com/playwright:v1.49.0-jammy
     depends_on: [install]
     environment:
+      BASE_URL:
+        from_secret: e2e_base_url
       API_BASE_URL: https://jsonplaceholder.typicode.com
+      KEYCLOAK_BASE_URL:
+        from_secret: keycloak_base_url
+      KEYCLOAK_REALM:
+        from_secret: keycloak_realm
+      KEYCLOAK_CLIENT_ID:
+        from_secret: keycloak_client_id
+      KEYCLOAK_CLIENT_SECRET:
+        from_secret: keycloak_client_secret
+      TEST_USERNAME:
+        from_secret: test_username
+      TEST_PASSWORD:
+        from_secret: test_password
     commands:
       - npm run test:api
 

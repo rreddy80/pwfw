@@ -18,16 +18,23 @@ npx playwright install chromium
 cp .env.example .env   # defaults already point at the demo targets below
 ```
 
-**API tests** — need nothing else, they hit the public JSONPlaceholder API:
+Every controller — API or UI — authenticates via a real Keycloak session by default (see
+`docs/AUTH.md`), so both suites need the included demo Keycloak running:
+
+```bash
+npm run keycloak:up                 # starts Keycloak on :8080 with the demo realm imported
+```
+
+**API tests** — Keycloak is all they need (they hit the public JSONPlaceholder API, not the
+sample app, so no browser/UI dependency):
 
 ```bash
 npm run test:api
 ```
 
-**E2E tests** — need the included demo stack (a local Keycloak + a tiny sample React app):
+**E2E tests** — additionally need the tiny sample React app:
 
 ```bash
-npm run keycloak:up                 # starts Keycloak on :8080 with the demo realm imported
 cd sample-app && npm install && npm run dev &   # starts the sample app on :5173
 cd ..
 npm run test:e2e
