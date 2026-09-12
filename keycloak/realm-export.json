@@ -14,8 +14,8 @@
       "directAccessGrantsEnabled": true,
       "implicitFlowEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["http://localhost:5173/*"],
-      "webOrigins": ["http://localhost:5173"],
+      "redirectUris": ["http://localhost:5679/*"],
+      "webOrigins": ["http://localhost:5679"],
       "attributes": {
         "pkce.code.challenge.method": "S256"
       }

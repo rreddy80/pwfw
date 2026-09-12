@@ -92,6 +92,7 @@ export const test = base.extend<AuthFixtures, AuthWorkerFixtures>({
             testUser.username,
             testUser.password,
             env.BASE_URL,
+            { visitRedirectUri: env.KEYCLOAK_VISIT_REDIRECT_URI_ON_LOGIN },
           );
           await request.dispose();
           return storageState;

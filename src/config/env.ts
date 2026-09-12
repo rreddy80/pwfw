@@ -25,6 +25,17 @@ const envSchema = z.object({
   KEYCLOAK_REALM: z.string().min(1).default('demo'),
   KEYCLOAK_CLIENT_ID: z.string().min(1).default('demo-app'),
   KEYCLOAK_CLIENT_SECRET: z.string().optional().default(''),
+  // If your app's redirect_uri is a real backend callback (a gateway/BFF that performs its
+  // own code exchange and issues its own session cookies when actually visited, not just
+  // Keycloak's) rather than a static page, API-mode login needs to actually GET that URL for
+  // those cookies to ever get set — see KeycloakAuth.loginForBrowserSession's
+  // `visitRedirectUri` option and docs/AUTH.md. Off by default: turning this on means
+  // BASE_URL must be reachable wherever login runs, including api-only test runs.
+  KEYCLOAK_VISIT_REDIRECT_URI_ON_LOGIN: z
+    .enum(['true', 'false'])
+    .optional()
+    .default('false')
+    .transform((v) => v === 'true'),
 
   // Test user credentials — the default identity `authenticatedPage`/`apiTokens` use.
   TEST_USERNAME: z.string().min(1).default('testuser'),

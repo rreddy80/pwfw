@@ -35,7 +35,7 @@ npm run test:api
 **E2E tests** — additionally need the tiny sample React app:
 
 ```bash
-cd sample-app && npm install && npm run dev &   # starts the sample app on :5173
+cd sample-app && npm install && npm run dev &   # starts the sample app on :5679
 cd ..
 npm run test:e2e
 ```

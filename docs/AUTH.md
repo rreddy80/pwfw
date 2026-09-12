@@ -108,6 +108,24 @@ cookie. Load it into a fresh `browser.newContext({ storageState })`, navigate to
 and its `login-required` redirect to Keycloak finds the existing SSO session and bounces
 straight back authenticated — no form rendered, no credentials typed into a page.
 
+**If your app sits behind a gateway/BFF that issues its own session cookies:** step 3 above
+never actually visits the real `redirect_uri?...code=...` — it just reads `code` out of the
+URL string and exchanges it with Keycloak directly, so API-mode login doesn't require your
+app to be reachable at all. That's the right default when `redirect_uri` is a static page.
+It's the _wrong_ default if `redirect_uri` is a real backend callback that performs its own
+code exchange and sets its own session cookies (commonly named something like `session`,
+`session_1`, `session_2`... when a gateway splits a large session value across multiple
+cookies to work around the ~4KB per-cookie limit) — those cookies only get set if that
+callback actually gets visited, which never happens by default. Symptom: cookies you expect
+after API-mode login (or on `apiHttpClient` calls) never show up.
+
+Fix: set `KEYCLOAK_VISIT_REDIRECT_URI_ON_LOGIN=true`. This makes
+`loginForBrowserSession` actually `GET` the real `redirect_uri` (and follow however many
+redirects it triggers from there) purely for that side effect — nothing in the response is
+read, `Set-Cookie` headers land in the same cookie jar the SSO cookie already came from.
+Off by default because turning it on means that callback must be reachable wherever login
+runs, CI included — not a cost every setup should pay.
+
 `authenticatedPage` (`page.fixtures.ts`) and `apiHttpClient` (`api.fixtures.ts`) both wrap
 all of this, and both pull from the same place: `resolveSsoSession`, a worker-scoped fixture
 defined once in the shared foundation, `auth.fixtures.ts`, that both files extend. It runs

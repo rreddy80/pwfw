@@ -55,7 +55,12 @@ export class HttpClient {
       ...this.options.defaultHeaders,
       ...opts.headers,
     };
-    if (this.bearerToken) {
+    // `!== undefined`, not a truthy check — setAuthToken('') is a deliberately distinct case
+    // from never calling setAuthToken at all: an empty-but-present Authorization header
+    // (`Bearer `) vs. no Authorization header whatsoever. A truthy check here would collapse
+    // both into "no header", making it impossible to test a backend's handling of an empty
+    // token as anything other than a missing one.
+    if (this.bearerToken !== undefined) {
       headers.Authorization = `Bearer ${this.bearerToken}`;
     }
 

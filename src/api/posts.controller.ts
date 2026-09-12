@@ -31,6 +31,10 @@ export class PostsController extends BaseController {
     return this.request('GET', `/posts/${id}`, postSchema);
   }
 
+  async listPosts(): Promise<PostDto[]> {
+    return this.request('GET', '/posts', z.array(postSchema));
+  }
+
   async listPostsByUser(userId: number): Promise<PostDto[]> {
     return this.request('GET', '/posts', z.array(postSchema), { params: { userId } });
   }

@@ -54,6 +54,18 @@ export class KeycloakAuth {
     username: string,
     password: string,
     redirectUri: string,
+    options: {
+      /**
+       * Actually `GET` the final `redirect_uri?...code=...` (and follow any further redirect
+       * chain from there) instead of just parsing `code` out of it, and let whatever's set
+       * up to run there (a BFF/gateway callback that performs its own code exchange and
+       * issues its own session cookies) actually run. Off by default — visiting it is a real
+       * HTTP call to your app/gateway, so turning this on means that target must be
+       * reachable wherever this login runs (CI included). Turn it on if cookies you expect
+       * after API-mode login (or `apiHttpClient` calls) aren't showing up — see docs/AUTH.md.
+       */
+      visitRedirectUri?: boolean;
+    } = {},
   ): Promise<BrowserSessionResult> {
     const pkce = generatePkcePair();
     const state = randomBytes(16).toString('base64url');
@@ -103,9 +115,12 @@ export class KeycloakAuth {
       );
     }
 
-    const code = await this.followRedirectsToAuthorizationCode(redirectResponse);
+    const codeResult = await this.followRedirectsToAuthorizationCode(
+      redirectResponse,
+      options.visitRedirectUri ?? false,
+    );
     const tokens = await this.authController.authorizationCodeGrant(
-      code,
+      codeResult.body,
       redirectUri,
       pkce.codeVerifier,
     );
@@ -124,8 +139,16 @@ export class KeycloakAuth {
    * some flow configurations insert). A browser just follows wherever Keycloak sends it
    * next; this does the same rather than assuming a fixed hop count, and only treats a
    * non-redirect response as an actual failure.
+   *
+   * Returns the `ApiResult` of that final redirect response, with the extracted
+   * authorization code in `.body` — not just a bare string — so the caller also has
+   * `status`/`headers`/`ok` for that hop if it ever needs them, instead of the code
+   * needing to be re-parsed out of a header string a second time at the call site.
    */
-  private async followRedirectsToAuthorizationCode(initial: ApiResult<unknown>): Promise<string> {
+  private async followRedirectsToAuthorizationCode(
+    initial: ApiResult<unknown>,
+    visitFinalRedirect: boolean,
+  ): Promise<ApiResult<string>> {
     let current = initial;
 
     for (let hop = 1; hop <= MAX_REDIRECT_HOPS; hop++) {
@@ -138,7 +161,12 @@ export class KeycloakAuth {
       }
 
       const code = new URL(location).searchParams.get('code');
-      if (code) return code;
+      if (code) {
+        if (visitFinalRedirect) {
+          await this.visitRedirectChainForSideEffects(location);
+        }
+        return { ...current, body: code };
+      }
 
       // Not the final hop yet — follow it exactly like a browser would (redirects are
       // followed via GET regardless of the method that produced them). This goes straight to
@@ -165,6 +193,24 @@ export class KeycloakAuth {
     throw new Error(
       `Keycloak login didn't reach an authorization code after ${MAX_REDIRECT_HOPS} redirects.`,
     );
+  }
+
+  /**
+   * `visitRedirectUri: true`'s actual work: GET the real `redirect_uri?...code=...` (which
+   * `followRedirectsToAuthorizationCode` deliberately never fetches otherwise) and keep
+   * following as long as it keeps redirecting, so a gateway/BFF callback chain that does its
+   * own code exchange and issues its own session cookies across multiple hops gets fully
+   * exercised. Nothing in the response is read — the only reason this exists is the
+   * `Set-Cookie` side effects it lands in `this.request`'s cookie jar automatically.
+   */
+  private async visitRedirectChainForSideEffects(startLocation: string): Promise<void> {
+    let next: string | undefined = startLocation;
+    for (let hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
+      if (!next) break;
+      const url: string = next;
+      const response = await this.request.get(url, { maxRedirects: 0 });
+      next = response.status() === 302 ? response.headers()['location'] : undefined;
+    }
   }
 }
 

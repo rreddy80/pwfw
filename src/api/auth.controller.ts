@@ -117,8 +117,8 @@ export class AuthController extends BaseController {
    * session for this request context and skipped straight to a redirect (`result.headers.location`
    * already has what you need, nothing left to submit).
    */
-  async authorize(params: AuthorizeParams): Promise<ApiResult<string>> {
-    return this.http.get<string>(keycloakConfig.authorizeUrl, {
+  async authorize(params: AuthorizeParams): Promise<ApiResult<unknown>> {
+    return this.http.get<unknown>(keycloakConfig.authorizeUrl, {
       params: {
         client_id: keycloakConfig.clientId,
         redirect_uri: params.redirectUri,
@@ -145,8 +145,8 @@ export class AuthController extends BaseController {
     actionUrl: string,
     username: string,
     password: string,
-  ): Promise<ApiResult<string>> {
-    return this.http.post<string>(actionUrl, {
+  ): Promise<ApiResult<unknown>> {
+    return this.http.post<unknown>(actionUrl, {
       form: { username, password, credentialId: '' },
       maxRedirects: 0,
     });
@@ -155,11 +155,17 @@ export class AuthController extends BaseController {
   /**
    * Parses the login form's `action` URL out of an `authorize()` response body. `null` means
    * no `<form>` was present in the response — see `authorize()`'s doc comment for what that means.
+   *
+   * Takes `unknown`, not `string`, on purpose: `HttpClient` tries to JSON.parse every
+   * response body and only falls back to the raw string when that fails, so a body that
+   * happens to *be* valid JSON (an object, array, number, even `null`) arrives here as that
+   * parsed value, not text — happened for real, this isn't a hypothetical. Anything that
+   * isn't an actual string is treated the same as "no form", since it can't contain one.
    */
-  extractLoginFormAction(html: string): string | null {
-    // A redirect response (the "already authenticated" case) has an empty body — genuinely
-    // no form, not an error, so this is a normal input here, not a bug to guard against.
-    if (!html) return null;
+  extractLoginFormAction(html: unknown): string | null {
+    // Covers both the empty-body "already authenticated" redirect case and any non-string
+    // (parsed-JSON) body — neither can contain a login form.
+    if (typeof html !== 'string' || !html) return null;
 
     // Keycloak's default (and most custom) login themes render:
     //   <form id="kc-form-login" ... action="https://.../login-actions/authenticate?...">
@@ -183,10 +189,14 @@ export class AuthController extends BaseController {
     return this.validate(result, userInfoSchema, 'GET userinfo endpoint');
   }
 
-  /** Unvalidated variant for asserting on the raw status — e.g. confirming a 401 without a token. */
+  /**
+   * Unvalidated variant for asserting on the raw status — e.g. confirming a 401 without a
+   * token (omit `accessToken`) as distinct from a 401 on an empty-but-present token
+   * (`accessToken: ''`) — `!== undefined`, not a truthy check, so both are actually reachable.
+   */
   async getUserInfoRaw(accessToken?: string): Promise<ApiResult<unknown>> {
     return this.http.get(keycloakConfig.userInfoUrl, {
-      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+      headers: accessToken !== undefined ? { Authorization: `Bearer ${accessToken}` } : {},
     });
   }
 
