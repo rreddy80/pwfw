@@ -8,10 +8,10 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "test": "playwright test",
-    "test:api": "TEST_REPORT_NAME=api-results.json playwright test --project=api",
-    "test:e2e": "TEST_REPORT_NAME=e2e-results.json playwright test --project=e2e",
-    "test:e2e:headed": "TEST_REPORT_NAME=e2e-results.json playwright test --project=e2e --headed",
+    "test": "NODE_OPTIONS=--max-http-header-size=65536 playwright test",
+    "test:api": "NODE_OPTIONS=--max-http-header-size=65536 TEST_REPORT_NAME=api-results.json playwright test --project=api",
+    "test:e2e": "NODE_OPTIONS=--max-http-header-size=65536 TEST_REPORT_NAME=e2e-results.json playwright test --project=e2e",
+    "test:e2e:headed": "NODE_OPTIONS=--max-http-header-size=65536 TEST_REPORT_NAME=e2e-results.json playwright test --project=e2e --headed",
     "report": "playwright show-report",
     "notify:teams": "tsx scripts/notify-teams.ts",
     "keycloak:up": "docker compose up -d",

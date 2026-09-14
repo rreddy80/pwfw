@@ -87,18 +87,28 @@ export const test = base.extend<AuthFixtures, AuthWorkerFixtures>({
 
         const promise = (async () => {
           const request = await playwright.request.newContext();
-          const keycloakAuth = new KeycloakAuth(request);
-          const { storageState } = await keycloakAuth.loginForBrowserSession(
-            testUser.username,
-            testUser.password,
-            env.BASE_URL,
-            { visitRedirectUri: env.KEYCLOAK_VISIT_REDIRECT_URI_ON_LOGIN },
-          );
-          await request.dispose();
-          return storageState;
+          try {
+            const keycloakAuth = new KeycloakAuth(request);
+            const { storageState } = await keycloakAuth.loginForBrowserSession(
+              testUser.username,
+              testUser.password,
+              env.BASE_URL,
+              { visitRedirectUri: env.KEYCLOAK_VISIT_REDIRECT_URI_ON_LOGIN },
+            );
+            return storageState;
+          } finally {
+            // Always — a thrown login must not leak this context.
+            await request.dispose();
+          }
         })();
 
         inFlight.set(cacheKey, promise);
+        // A failed attempt must not permanently poison this user for the rest of the
+        // worker: without this, every later call would keep returning this same cached
+        // rejection forever, with no retry ever happening again. Callers already awaiting
+        // *this* promise instance still correctly see its rejection — only the *next* call
+        // gets a fresh attempt instead of the stale failure.
+        promise.catch(() => inFlight.delete(cacheKey));
         return promise;
       };
 

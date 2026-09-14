@@ -3,6 +3,18 @@ import { logger } from '../helpers/logger.js';
 import type { ApiResult } from './types.js';
 
 export interface HttpClientOptions {
+  /**
+   * Base URL to resolve relative `path` values against — joined explicitly here rather than
+   * left to Playwright's own `APIRequestContext` `baseURL` option, because that one follows
+   * strict URL-resolution semantics: a relative path starting with `/` is an "absolute path
+   * reference", which *replaces* the base URL's own path rather than appending after it. Fine
+   * for a base URL with no path component (our demo target), silently wrong the moment it
+   * has one (`https://gateway.corp.com/api` + `/posts` resolves to `https://gateway.corp.com/posts`
+   * via that mechanism — the `/api` prefix vanishes). Every controller in this repo writes
+   * paths with a leading slash (`'/posts'`), so this joins correctly regardless rather than
+   * requiring every path to avoid one.
+   */
+  baseUrl?: string;
   /** Headers applied to every request from this client (e.g. Content-Type). */
   defaultHeaders?: Record<string, string>;
 }
@@ -26,12 +38,11 @@ export interface RequestOptions {
  * already-`.json()`-parsed `ApiResult<T>`. Controllers build on top of this; tests should
  * never reach for `APIRequestContext` directly — see `BaseController`.
  *
- * Deliberately does NOT resolve base URLs or serialize query params itself — `request.fetch()`
- * already does both natively (relative `path` merges against whatever `baseURL` the
- * `APIRequestContext` was created with, exactly like `page.goto()` does; `params` is a
- * first-class option). Reimplementing either here would just be a worse copy of what
- * Playwright already does — see the fixtures in `src/fixtures/api.fixtures.ts` for how each
- * controller's `HttpClient` gets a context bound to the right `baseURL`.
+ * Does NOT reimplement query-param serialization — `request.fetch()`'s `params` option
+ * already does that correctly, no reason to duplicate it. Base-URL joining is the one thing
+ * this *does* do itself rather than leaving to Playwright — see `HttpClientOptions.baseUrl`
+ * for why letting `request.fetch()` handle it natively silently breaks the moment the base
+ * URL has its own path prefix (a real gateway, not our path-less demo target).
  */
 export class HttpClient {
   private bearerToken: string | undefined;
@@ -64,12 +75,14 @@ export class HttpClient {
       headers.Authorization = `Bearer ${this.bearerToken}`;
     }
 
+    const url = this.resolveUrl(path);
+
     logger.debug(
-      `--> ${method} ${path}`,
+      `--> ${method} ${url}`,
       (opts.data ?? opts.form) ? { body: opts.data ?? opts.form } : undefined,
     );
 
-    const response = await this.request.fetch(path, {
+    const response = await this.request.fetch(url, {
       method,
       headers,
       data: opts.form ? undefined : opts.data,
@@ -83,7 +96,7 @@ export class HttpClient {
     const body = parseJsonSafely<T>(rawBody);
     const responseHeaders = response.headers();
 
-    logger.debug(`<-- ${status} ${method} ${path}`);
+    logger.debug(`<-- ${status} ${method} ${url}`);
 
     return {
       status,
@@ -91,6 +104,19 @@ export class HttpClient {
       body,
       headers: responseHeaders,
     };
+  }
+
+  /**
+   * `path` is already absolute (AuthController's calls to Keycloak's fully-qualified
+   * endpoints) — use it untouched. Otherwise join it onto `options.baseUrl` by plain string
+   * concatenation (normalizing away any doubled/missing slash at the join point), not via
+   * `new URL(path, base)` — that constructor treats a leading `/` on `path` as "replace the
+   * base's path entirely", which is exactly the bug this class exists to avoid. No
+   * `options.baseUrl` at all means this client was built to always receive full URLs itself.
+   */
+  private resolveUrl(path: string): string {
+    if (!this.options.baseUrl || /^https?:\/\//i.test(path)) return path;
+    return `${this.options.baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
   }
 
   get = <T>(path: string, opts?: RequestOptions) => this.send<T>('GET', path, opts);

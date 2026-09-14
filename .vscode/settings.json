@@ -1,0 +1,10 @@
+{
+  // Applies to tests run via the Playwright Test extension's run/debug buttons — that path
+  // spawns its own test process directly, bypassing package.json's npm scripts entirely, so
+  // the NODE_OPTIONS baked into `test`/`test:api`/`test:e2e` there doesn't reach it. This is
+  // the extension's own equivalent. See docs/AUTH.md for why this flag exists (large chunked
+  // session cookies from a gateway/BFF can exceed Node's default HTTP header size limit).
+  "playwright.env": {
+    "NODE_OPTIONS": "--max-http-header-size=65536"
+  }
+}

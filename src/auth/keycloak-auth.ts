@@ -209,6 +209,22 @@ export class KeycloakAuth {
       if (!next) break;
       const url: string = next;
       const response = await this.request.get(url, { maxRedirects: 0 });
+
+      // `.headers()` collapses multiple same-named headers into one — Set-Cookie is exactly
+      // the header that commonly repeats, so it alone can silently show only one of several
+      // cookies actually present. `.headersArray()` keeps every occurrence separate; run
+      // with DEBUG=pw:* to see exactly what Set-Cookie(s) came back at each hop, and check
+      // each one's Domain/Path/Secure/SameSite against where your later requests actually go
+      // — a mismatch there (not a fetch/parsing bug) is the usual reason a cookie that *was*
+      // set doesn't show up on a subsequent request.
+      const setCookies = response
+        .headersArray()
+        .filter((h) => h.name.toLowerCase() === 'set-cookie')
+        .map((h) => h.value);
+      logger.debug(`visitRedirectChainForSideEffects: GET ${url} -> ${response.status()}`, {
+        setCookies,
+      });
+
       next = response.status() === 302 ? response.headers()['location'] : undefined;
     }
   }

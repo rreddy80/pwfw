@@ -29,11 +29,11 @@ export interface ApiFixtures {
 export const test = authTest.extend<ApiFixtures>({
   apiHttpClient: async ({ playwright, testUser, resolveSsoSession }, use) => {
     const storageState = await resolveSsoSession(testUser);
-    const context = await playwright.request.newContext({
-      baseURL: env.API_BASE_URL,
-      storageState,
-    });
-    await use(new HttpClient(context));
+    // No `baseURL` on the context itself — `HttpClient`'s own `baseUrl` option does that
+    // joining correctly (see http-client.ts for why Playwright's own baseURL merging can't
+    // be trusted for a base URL with a path prefix, e.g. a gateway's `/api`).
+    const context = await playwright.request.newContext({ storageState });
+    await use(new HttpClient(context, { baseUrl: env.API_BASE_URL }));
     await context.dispose();
   },
 

@@ -126,6 +126,20 @@ read, `Set-Cookie` headers land in the same cookie jar the SSO cookie already ca
 Off by default because turning it on means that callback must be reachable wherever login
 runs, CI included — not a cost every setup should pay.
 
+**If several chunked cookies push you into `Parse Error: Header overflow`:** Node's own
+HTTP client (which `APIRequestContext.fetch()` runs on) rejects a response outright once its
+_total_ header size passes a hard limit — 16KB by default. Six ~4KB session cookies on one
+response clears that easily. The `test`/`test:api`/`test:e2e` npm scripts already set
+`NODE_OPTIONS=--max-http-header-size=65536` for exactly this reason; if you added your own
+npm scripts or run Playwright directly rather than through these, add that same
+`NODE_OPTIONS` yourself or the same parse error will resurface.
+
+**Debugging either of the above:** run with `DEBUG=pw:api` and check the
+`visitRedirectChainForSideEffects: GET ... -> ...` debug line — it lists every `Set-Cookie`
+actually received at each hop (via `headersArray()`, which — unlike `.headers()` — doesn't
+collapse repeated header names like `Set-Cookie` into one), so you can compare what was
+_set_ against what shows up (or doesn't) on a later request, and its `Path`/`Domain` there.
+
 `authenticatedPage` (`page.fixtures.ts`) and `apiHttpClient` (`api.fixtures.ts`) both wrap
 all of this, and both pull from the same place: `resolveSsoSession`, a worker-scoped fixture
 defined once in the shared foundation, `auth.fixtures.ts`, that both files extend. It runs
